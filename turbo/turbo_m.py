@@ -7,6 +7,8 @@
 #                                                                             #
 # See the License for the specific language governing permissions and         #
 # limitations under the License.                                              #
+#                                                                             #
+# Allowed for user inputs.                                                    #
 ###############################################################################
 
 import math
@@ -41,6 +43,8 @@ class TurboM(Turbo1):
     min_cuda : We use float64 on the CPU if we have this or fewer datapoints
     device : Device to use for GP fitting ("cpu" or "cuda")
     dtype : Dtype to use for GP fitting ("float32" or "float64")
+    X_init : User input initial observed x values 
+    Y_init : User input initial observed y values 
 
     Example usage:
         turbo5 = TurboM(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals, n_trust_regions=5)
@@ -63,7 +67,9 @@ class TurboM(Turbo1):
         n_training_steps=50,
         min_cuda=1024,
         device="cpu",
-        dtype="float64",
+        dtype="float64", 
+        X_init=None,
+        Y_init=None,
     ):
         self.n_trust_regions = n_trust_regions
         super().__init__(
@@ -79,7 +85,9 @@ class TurboM(Turbo1):
             n_training_steps=n_training_steps,
             min_cuda=min_cuda,
             device=device,
-            dtype=dtype,
+            dtype=dtype, 
+            X_init=X_init,
+            Y_init=Y_init,
         )
 
         self.succtol = 3
@@ -144,9 +152,13 @@ class TurboM(Turbo1):
         """Run the full optimization process."""
         # Create initial points for each TR
         for i in range(self.n_trust_regions):
-            X_init = latin_hypercube(self.n_init, self.dim)
-            X_init = from_unit_cube(X_init, self.lb, self.ub)
-            fX_init = np.array([[self.f(x)] for x in X_init])
+            if self.X_init is None:
+                X_init = latin_hypercube(self.n_init, self.dim)
+                X_init = from_unit_cube(X_init, self.lb, self.ub)
+                fX_init = np.array([[self.f(x)] for x in X_init])
+            else:
+                X_init = self.X_init
+                fX_init = np.array([[y] for y in self.Y_init])  
 
             # Update budget and set as initial data for this TR
             self.X = np.vstack((self.X, X_init))

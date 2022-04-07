@@ -7,6 +7,8 @@
 #                                                                             #
 # See the License for the specific language governing permissions and         #
 # limitations under the License.                                              #
+#                                                                             #
+# Allow user to input initial observed values                                 #
 ###############################################################################
 
 import math
@@ -40,6 +42,8 @@ class Turbo1:
     min_cuda : We use float64 on the CPU if we have this or fewer datapoints
     device : Device to use for GP fitting ("cpu" or "cuda")
     dtype : Dtype to use for GP fitting ("float32" or "float64")
+    X_init : User input initial observed x values 
+    Y_init : User input initial observed y values 
 
     Example usage:
         turbo1 = Turbo1(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals)
@@ -62,6 +66,8 @@ class Turbo1:
         min_cuda=1024,
         device="cpu",
         dtype="float64",
+        X_init=None,
+        Y_init=None,
     ):
 
         # Very basic input checks
@@ -77,6 +83,7 @@ class Turbo1:
         assert max_evals > n_init and max_evals > batch_size
         assert device == "cpu" or device == "cuda"
         assert dtype == "float32" or dtype == "float64"
+         
         if device == "cuda":
             assert torch.cuda.is_available(), "can't use cuda if it's not available"
 
@@ -115,6 +122,10 @@ class Turbo1:
         # Save the full history
         self.X = np.zeros((0, self.dim))
         self.fX = np.zeros((0, 1))
+        
+        # Initial observed values 
+        self.X_init = X_init 
+        self.Y_init = Y_init 
 
         # Device and dtype for GPyTorch
         self.min_cuda = min_cuda
@@ -245,9 +256,13 @@ class Turbo1:
             self._restart()
 
             # Generate and evalute initial design points
-            X_init = latin_hypercube(self.n_init, self.dim)
-            X_init = from_unit_cube(X_init, self.lb, self.ub)
-            fX_init = np.array([[self.f(x)] for x in X_init])
+            if self.X_init is None:
+                X_init = latin_hypercube(self.n_init, self.dim)
+                X_init = from_unit_cube(X_init, self.lb, self.ub)
+                fX_init = np.array([[self.f(x)] for x in X_init])
+            else:
+                X_init = self.X_init 
+                fX_init = np.array([[y] for y in self.Y_init])
 
             # Update budget and set as initial data for this TR
             self.n_evals += self.n_init

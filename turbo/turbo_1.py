@@ -21,7 +21,7 @@ import torch
 from torch.quasirandom import SobolEngine
 
 from .gp import train_gp
-from .utils import from_unit_cube, latin_hypercube, to_unit_cube
+from .utils import from_unit_cube, latin_hypercube, latin_hypercube_deterministic, to_unit_cube
 
 
 class Turbo1:
@@ -42,8 +42,10 @@ class Turbo1:
     min_cuda : We use float64 on the CPU if we have this or fewer datapoints
     device : Device to use for GP fitting ("cpu" or "cuda")
     dtype : Dtype to use for GP fitting ("float32" or "float64")
-    X_init : User input initial observed x values 
-    Y_init : User input initial observed y values 
+    X_init : User input initial observed x values
+    Y_init : User input initial observed y values
+    seed: Random seed, int
+    deterministic_doe: If True, use deterministic design of experiments, bool
 
     Example usage:
         turbo1 = Turbo1(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals)
@@ -68,6 +70,8 @@ class Turbo1:
         dtype="float64",
         X_init=None,
         Y_init=None,
+        seed="0",
+        deterministic_doe=True,
     ):
 
         # Very basic input checks
@@ -101,6 +105,8 @@ class Turbo1:
         self.use_ard = use_ard
         self.max_cholesky_size = max_cholesky_size
         self.n_training_steps = n_training_steps
+        self.seed = seed
+        self.deterministic_doe = deterministic_doe
 
         # Hyperparameters
         self.mean = np.zeros((0, 1))
@@ -257,7 +263,11 @@ class Turbo1:
 
             # Generate and evalute initial design points
             if self.X_init is None:
-                X_init = latin_hypercube(self.n_init, self.dim)
+                if self.deterministic_doe:
+                    X_init = latin_hypercube_deterministic(self.n_init, self.dim, seed=self.seed)
+                else:
+                    X_init = latin_hypercube(self.n_init, self.dim)
+
                 X_init = from_unit_cube(X_init, self.lb, self.ub)
                 fX_init = np.array([[self.f(x)] for x in X_init])
             else:

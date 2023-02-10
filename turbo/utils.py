@@ -10,6 +10,7 @@
 ###############################################################################
 
 import numpy as np
+from scipy.stats import qmc
 
 
 def to_unit_cube(x, lb, ub):
@@ -37,3 +38,11 @@ def latin_hypercube(n_pts, dim):
     pert = np.random.uniform(-1.0, 1.0, (n_pts, dim)) / float(2 * n_pts)
     X += pert
     return X
+
+
+def latin_hypercube_deterministic(n_pts, dim, seed):
+    """Uses a deterministic version of latin hypercube"""
+    if isinstance(seed, int):
+        seed = np.random.default_rng(seed)
+    sampler = qmc.LatinHypercube(centered=False, d=dim, seed=seed)
+    return sampler.random(n_pts)

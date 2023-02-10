@@ -21,7 +21,7 @@ import torch
 
 from .gp import train_gp
 from .turbo_1 import Turbo1
-from .utils import from_unit_cube, latin_hypercube, to_unit_cube
+from .utils import from_unit_cube, latin_hypercube, latin_hypercube_deterministic, to_unit_cube
 
 
 class TurboM(Turbo1):
@@ -44,7 +44,9 @@ class TurboM(Turbo1):
     device : Device to use for GP fitting ("cpu" or "cuda")
     dtype : Dtype to use for GP fitting ("float32" or "float64")
     X_init : User input initial observed x values 
-    Y_init : User input initial observed y values 
+    Y_init : User input initial observed y values
+    seed: Random seed, int
+    deterministic_doe: If True, use deterministic design of experiments, bool
 
     Example usage:
         turbo5 = TurboM(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals, n_trust_regions=5)
@@ -70,6 +72,8 @@ class TurboM(Turbo1):
         dtype="float64", 
         X_init=None,
         Y_init=None,
+        seed="1",
+        deterministic_doe=True,
     ):
         self.n_trust_regions = n_trust_regions
         super().__init__(
@@ -88,6 +92,8 @@ class TurboM(Turbo1):
             dtype=dtype, 
             X_init=X_init,
             Y_init=Y_init,
+            seed=seed,
+            deterministic_doe=deterministic_doe
         )
 
         self.succtol = 3
@@ -153,7 +159,10 @@ class TurboM(Turbo1):
         # Create initial points for each TR
         for i in range(self.n_trust_regions):
             if self.X_init is None:
-                X_init = latin_hypercube(self.n_init, self.dim)
+                if self.deterministic_doe:
+                    X_init = latin_hypercube_deterministic(self.n_init, self.dim, seed=self.seed)
+                else:
+                    X_init = latin_hypercube(self.n_init, self.dim)
                 X_init = from_unit_cube(X_init, self.lb, self.ub)
                 fX_init = np.array([[self.f(x)] for x in X_init])
             else:

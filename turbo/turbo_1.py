@@ -84,7 +84,7 @@ class Turbo1:
         assert isinstance(verbose, bool) and isinstance(use_ard, bool)
         assert max_cholesky_size >= 0 and isinstance(batch_size, int)
         assert n_training_steps >= 30 and isinstance(n_training_steps, int)
-        assert max_evals > n_init and max_evals > batch_size
+        assert max_evals >= n_init and max_evals >= batch_size
         assert device == "cpu" or device == "cuda"
         assert dtype == "float32" or dtype == "float64"
          

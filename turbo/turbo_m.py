@@ -101,8 +101,8 @@ class TurboM(Turbo1):
 
         # Very basic input checks
         assert n_trust_regions > 1 and isinstance(max_evals, int)
-        assert max_evals > n_trust_regions * n_init, "Not enough trust regions to do initial evaluations"
-        assert max_evals > batch_size, "Not enough evaluations to do a single batch"
+        assert max_evals >= n_trust_regions * n_init, "Not enough trust regions to do initial evaluations"
+        assert max_evals >= batch_size, "Not enough evaluations to do a single batch"
 
         # Remember the hypers for trust regions we don't sample from
         self.hypers = [{} for _ in range(self.n_trust_regions)]

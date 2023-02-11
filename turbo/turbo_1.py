@@ -79,7 +79,8 @@ class Turbo1:
         assert len(lb) == len(ub)
         assert np.all(ub > lb)
         assert max_evals > 0 and isinstance(max_evals, int)
-        assert n_init > 0 and isinstance(n_init, int)
+        if X_init is None:
+            assert n_init > 0 and isinstance(n_init, int)
         assert batch_size > 0 and isinstance(batch_size, int)
         assert isinstance(verbose, bool) and isinstance(use_ard, bool)
         assert max_cholesky_size >= 0 and isinstance(batch_size, int)

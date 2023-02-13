@@ -24,6 +24,21 @@ from .gp import train_gp
 from .utils import from_unit_cube, latin_hypercube, latin_hypercube_deterministic, to_unit_cube
 
 
+class State:
+    """Class to store the state of the optimization."""
+
+    def __init__(self, X, _X, fX, _fX, restarts, n_init, tr_succcount, tr_failcount, tr_length):
+        self.X = X
+        self._X = _X
+        self.fX = fX
+        self._fX = _fX
+        self.restarts = restarts
+        self.n_init = n_init
+        self.tr_succcount = tr_succcount
+        self.tr_failcount = tr_failcount
+        self.tr_length = tr_length
+
+
 class Turbo1:
     """The TuRBO-1 algorithm.
 
@@ -42,10 +57,9 @@ class Turbo1:
     min_cuda : We use float64 on the CPU if we have this or fewer datapoints
     device : Device to use for GP fitting ("cpu" or "cuda")
     dtype : Dtype to use for GP fitting ("float32" or "float64")
-    X_init : User input initial observed x values
-    Y_init : User input initial observed y values
     seed: Random seed, int
     deterministic_doe: If True, use deterministic design of experiments, bool
+    state: State object to resume optimization
 
     Example usage:
         turbo1 = Turbo1(f=f, lb=lb, ub=ub, n_init=n_init, max_evals=max_evals)
@@ -68,10 +82,9 @@ class Turbo1:
         min_cuda=1024,
         device="cpu",
         dtype="float64",
-        X_init=None,
-        Y_init=None,
         seed="0",
         deterministic_doe=True,
+        state=None,
     ):
 
         # Very basic input checks
@@ -79,8 +92,7 @@ class Turbo1:
         assert len(lb) == len(ub)
         assert np.all(ub > lb)
         assert max_evals > 0 and isinstance(max_evals, int)
-        if X_init is None:
-            assert n_init > 0 and isinstance(n_init, int)
+        assert n_init > 0 and isinstance(n_init, int)
         assert batch_size > 0 and isinstance(batch_size, int)
         assert isinstance(verbose, bool) and isinstance(use_ard, bool)
         assert max_cholesky_size >= 0 and isinstance(batch_size, int)
@@ -130,9 +142,11 @@ class Turbo1:
         self.X = np.zeros((0, self.dim))
         self.fX = np.zeros((0, 1))
         
-        # Initial observed values 
-        self.X_init = X_init 
-        self.Y_init = Y_init 
+        self.state = state
+        if self.state is None:
+            self.tr_restarts = []
+        else:
+            self.tr_restarts = self.state.restarts
 
         # Device and dtype for GPyTorch
         self.min_cuda = min_cuda
@@ -143,14 +157,26 @@ class Turbo1:
             sys.stdout.flush()
 
         # Initialize parameters
-        self._restart()
+        if self.state is not None:
+            self._restart(
+                X=self.state._X,
+                fX=self.state._fX,
+                failcount=self.state.tr_failcount,
+                succcount=self.state.tr_succcount,
+                length=self.state.tr_length,
+            )
+        else:
+            self._restart()
 
-    def _restart(self):
-        self._X = []
-        self._fX = []
-        self.failcount = 0
-        self.succcount = 0
-        self.length = self.length_init
+    def _restart(self, X=[], fX=[], failcount=0, succcount=0, length=None):
+        self._X = X
+        self._fX = fX
+        self.failcount = failcount
+        self.succcount = succcount
+        if length is None:
+            self.length = self.length_init
+        else:
+            self.length = length
 
     def _adjust_length(self, fX_next):
         if np.min(fX_next) < np.min(self._fX) - 1e-3 * math.fabs(np.min(self._fX)):
@@ -251,77 +277,97 @@ class Turbo1:
             y_cand[indbest, :] = np.inf
         return X_next
 
+    def next_points(self):
+        # Thompson sample to get next suggestions
+        if self.n_evals < self.max_evals and self.length >= self.length_min:
+            # Warp inputs
+            X = to_unit_cube(deepcopy(self._X), self.lb, self.ub)
+
+            # Standardize values
+            fX = deepcopy(self._fX).ravel()
+
+            # Create th next batch
+            X_cand, y_cand, _ = self._create_candidates(
+                X, fX, length=self.length, n_training_steps=self.n_training_steps, hypers={}
+            )
+            X_next = self._select_candidates(X_cand, y_cand)
+
+            # Undo the warping
+            X_next = from_unit_cube(X_next, self.lb, self.ub)
+            return (True, X_next)
+        else:
+            return (False, None)
+
+    def process_evaluated_points(self, X_next, fX_next):
+        # Update trust region
+        self._adjust_length(fX_next)
+
+        # Update budget and append data
+        self.n_evals += self.batch_size
+        self._X = np.vstack((self._X, X_next))
+        self._fX = np.vstack((self._fX, fX_next))
+
+        if self.verbose and fX_next.min() < self.fX.min():
+            n_evals, fbest = self.n_evals, fX_next.min()
+            print(f"{n_evals}) New best: {fbest:.4}")
+            sys.stdout.flush()
+
+        # Append data to the global history
+        self.X = np.vstack((self.X, deepcopy(X_next)))
+        self.fX = np.vstack((self.fX, deepcopy(fX_next)))
+
+
+    def doe(self, X_init=None, Y_init=None):
+        # Generate and evalute initial design points
+        if X_init is None:
+            if self.deterministic_doe:
+                X_init = latin_hypercube_deterministic(self.n_init, self.dim, seed=self.seed+len(self.tr_restarts))
+            else:
+                X_init = latin_hypercube(self.n_init, self.dim)
+
+            X_init = from_unit_cube(X_init, self.lb, self.ub)
+            fX_init = np.array([[self.f(x)] for x in X_init])
+        else:
+            fX_init = np.array([[y] for y in Y_init])
+
+        # Update budget and set as initial data for this TR
+        self.n_evals += self.n_init
+        self._X = deepcopy(X_init)
+        self._fX = deepcopy(fX_init)
+
+        # Append data to the global history
+        self.X = np.vstack((self.X, deepcopy(X_init)))
+        self.fX = np.vstack((self.fX, deepcopy(fX_init)))
+
+
     def optimize(self):
         """Run the full optimization process."""
+        re_init = False
         while self.n_evals < self.max_evals:
             if len(self._fX) > 0 and self.verbose:
                 n_evals, fbest = self.n_evals, self._fX.min()
                 print(f"{n_evals}) Restarting with fbest = {fbest:.4}")
                 sys.stdout.flush()
 
-            # Initialize parameters
-            self._restart()
-
-            # Generate and evalute initial design points
-            if self.X_init is None:
-                if self.deterministic_doe:
-                    X_init = latin_hypercube_deterministic(self.n_init, self.dim, seed=self.seed)
-                else:
-                    X_init = latin_hypercube(self.n_init, self.dim)
-
-                X_init = from_unit_cube(X_init, self.lb, self.ub)
-                fX_init = np.array([[self.f(x)] for x in X_init])
+            # Generate initial design
+            if re_init:
+                self._restart()
+                self.doe()
+            elif len(self._fX) == 0:
+                self.doe()
             else:
-                X_init = self.X_init 
-                fX_init = np.array([[y] for y in self.Y_init])
-
-            # Update budget and set as initial data for this TR
-            self.n_evals += self.n_init
-            self._X = deepcopy(X_init)
-            self._fX = deepcopy(fX_init)
-
-            # Append data to the global history
-            self.X = np.vstack((self.X, deepcopy(X_init)))
-            self.fX = np.vstack((self.fX, deepcopy(fX_init)))
+                self.doe(self._X, self._fX)
 
             if self.verbose:
                 fbest = self._fX.min()
                 print(f"Starting from fbest = {fbest:.4}")
                 sys.stdout.flush()
 
-            # Thompson sample to get next suggestions
-            while self.n_evals < self.max_evals and self.length >= self.length_min:
-                # Warp inputs
-                X = to_unit_cube(deepcopy(self._X), self.lb, self.ub)
-
-                # Standardize values
-                fX = deepcopy(self._fX).ravel()
-
-                # Create th next batch
-                X_cand, y_cand, _ = self._create_candidates(
-                    X, fX, length=self.length, n_training_steps=self.n_training_steps, hypers={}
-                )
-                X_next = self._select_candidates(X_cand, y_cand)
-
-                # Undo the warping
-                X_next = from_unit_cube(X_next, self.lb, self.ub)
-
+            tr_valid, X_next = self.next_points()
+            while tr_valid and X_next is not None:
                 # Evaluate batch
                 fX_next = np.array([[self.f(x)] for x in X_next])
-
-                # Update trust region
-                self._adjust_length(fX_next)
-
-                # Update budget and append data
-                self.n_evals += self.batch_size
-                self._X = np.vstack((self._X, X_next))
-                self._fX = np.vstack((self._fX, fX_next))
-
-                if self.verbose and fX_next.min() < self.fX.min():
-                    n_evals, fbest = self.n_evals, fX_next.min()
-                    print(f"{n_evals}) New best: {fbest:.4}")
-                    sys.stdout.flush()
-
-                # Append data to the global history
-                self.X = np.vstack((self.X, deepcopy(X_next)))
-                self.fX = np.vstack((self.fX, deepcopy(fX_next)))
+                self.process_evaluated_points(X_next, fX_next)
+                tr_valid, X_next = self.next_points()
+            self.tr_restarts.append(self.n_evals)
+            re_init = True
